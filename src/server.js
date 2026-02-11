@@ -15,8 +15,12 @@ async function start() {
     await sequelize.authenticate();
     console.log("BD conectada");
 
-    await sequelize.sync();
-    console.log("Modelos sincronizados");
+    if (process.env.NODE_ENV !== "production") {
+      await sequelize.sync();
+      console.log("Modelos sincronizados (dev)");
+    } else {
+      console.log("Producción: sync deshabilitado");
+    }
 
     const server = http.createServer(app);
     const io = setupSocket(server);
@@ -24,7 +28,7 @@ async function start() {
     app.set("io", io);
 
     server.listen(PORT, () => {
-      console.log(`API + Socket corriendo en http://192.168.100.100:${PORT}`);
+      console.log(`API + Socket corriendo en ${PORT}`);
     });
   } catch (error) {
     console.error("Error al iniciar:", error);
