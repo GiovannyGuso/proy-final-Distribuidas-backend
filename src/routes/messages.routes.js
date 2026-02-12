@@ -98,6 +98,8 @@ router.post("/:chatId/messages", authRequired, upload.any(), async (req, res, ne
 
       // si el receptor NO está en el chat abierto, igual debe llegarle:
       io.to(`user_${receiverId}`).emit("message:new", msg);
+      io.to(`chat_${chatId}`).emit("message:deleted", { chatId, messageId });
+
 
       // (opcional recomendado) si el emisor está en otra pantalla, también:
       io.to(`user_${me}`).emit("message:new", msg);
@@ -229,10 +231,19 @@ router.delete("/:chatId/messages/:messageId", authRequired, async (req, res, nex
     await msg.destroy();
 
     // ✅ Socket: avisar a ambos para removerlo de la UI
+    // ✅ Socket: avisar a ambos para removerlo de la UI (chat room + user rooms)
     const io = req.app.get("io");
     if (io) {
+      const me = Number(req.user.id);
+      const otherId = getOtherUserId(check.chat, me);
+
       io.to(`chat_${chatId}`).emit("message:deleted", { chatId, messageId });
+
+      // ✅ si no están dentro del chat abierto, igual se enteran
+      io.to(`user_${me}`).emit("message:deleted", { chatId, messageId });
+      io.to(`user_${otherId}`).emit("message:deleted", { chatId, messageId });
     }
+
 
     return res.json({ ok: true, chatId, messageId });
   } catch (err) {
