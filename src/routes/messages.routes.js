@@ -209,5 +209,35 @@ router.put("/:chatId/messages/:messageId/delivered", authRequired, async (req, r
     next(err);
   }
 });
+// ✅ DELETE /chats/:chatId/messages/:messageId  -> borrar 1 mensaje (solo el dueño)
+router.delete("/:chatId/messages/:messageId", authRequired, async (req, res, next) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    const messageId = Number(req.params.messageId);
+
+    const check = await requireChatMember(chatId, req.user.id);
+    if (check.error) return res.status(check.error.status).json(check.error.json);
+
+    const msg = await Message.findOne({ where: { id: messageId, chat_id: chatId } });
+    if (!msg) return res.status(404).json({ message: "Mensaje no encontrado" });
+
+    // ✅ Solo el que lo envió puede borrar (WhatsApp-style simple)
+    if (Number(msg.sender_user_id) !== Number(req.user.id)) {
+      return res.status(403).json({ message: "No puedes eliminar mensajes de otro usuario" });
+    }
+
+    await msg.destroy();
+
+    // ✅ Socket: avisar a ambos para removerlo de la UI
+    const io = req.app.get("io");
+    if (io) {
+      io.to(`chat_${chatId}`).emit("message:deleted", { chatId, messageId });
+    }
+
+    return res.json({ ok: true, chatId, messageId });
+  } catch (err) {
+    next(err);
+  }
+});
 
 module.exports = router;
