@@ -18,6 +18,13 @@ async function requireChatMember(chatId, userId) {
   return { chat };
 }
 
+// ---- helper: obtener el otro participante ----
+function getOtherUserId(chat, me) {
+  const buyerId = Number(chat.buyer_user_id);
+  const sellerId = Number(chat.seller_user_id);
+  return me === buyerId ? sellerId : buyerId;
+}
+
 // GET /chats/:chatId/messages
 router.get("/:chatId/messages", authRequired, async (req, res, next) => {
   try {
@@ -35,7 +42,6 @@ router.get("/:chatId/messages", authRequired, async (req, res, next) => {
     next(err);
   }
 });
-
 
 // POST /chats/:chatId/messages  (multipart)
 // keys: text (opcional) + files (opcional)
@@ -80,10 +86,43 @@ router.post("/:chatId/messages", authRequired, upload.any(), async (req, res, ne
     check.chat.last_message_at = new Date();
     await check.chat.save();
 
-    // 🔥 Socket: nuevo mensaje
+    // ✅ WhatsApp-like: emitir al room del chat + al room del usuario receptor
     const io = req.app.get("io");
+    const me = Number(req.user.id);
+    const receiverId = getOtherUserId(check.chat, me);
+
     console.log("IO EXISTE?", !!io);
-    if (io) io.to(`chat_${chatId}`).emit("message:new", msg);
+    if (io) {
+      // si el chat está abierto en pantalla (join_chat), llega por aquí:
+      io.to(`chat_${chatId}`).emit("message:new", msg);
+
+      // si el receptor NO está en el chat abierto, igual debe llegarle:
+      io.to(`user_${receiverId}`).emit("message:new", msg);
+
+      // (opcional recomendado) si el emisor está en otra pantalla, también:
+      io.to(`user_${me}`).emit("message:new", msg);
+
+      // ✅ (opcional) marcar delivered automáticamente si el receptor está "online"
+      // requiere que en socket.js hayas definido io.isUserOnline(userId)
+      if (typeof io.isUserOnline === "function" && io.isUserOnline(receiverId)) {
+        if (!msg.delivered_at) {
+          msg.delivered_at = new Date();
+          await msg.save();
+
+          // notificar delivered al chat y al emisor (para ✅✅ gris aunque no esté en el chat)
+          io.to(`chat_${chatId}`).emit("message:delivered", {
+            chatId,
+            messageId: msg.id,
+            delivered_at: msg.delivered_at,
+          });
+          io.to(`user_${me}`).emit("message:delivered", {
+            chatId,
+            messageId: msg.id,
+            delivered_at: msg.delivered_at,
+          });
+        }
+      }
+    }
 
     res.status(201).json(msg);
   } catch (err) {
@@ -98,20 +137,29 @@ router.put("/:chatId/read", authRequired, async (req, res, next) => {
     const check = await requireChatMember(chatId, req.user.id);
     if (check.error) return res.status(check.error.status).json(check.error.json);
 
+    const me = Number(req.user.id);
+
     await Message.update(
       { read_at: new Date() },
       {
         where: {
           chat_id: chatId,
-          sender_user_id: { [Op.ne]: req.user.id },
+          sender_user_id: { [Op.ne]: me },
           read_at: null,
         },
       }
     );
 
-    // Socket: leído (para checks azules)
+    // ✅ notificar "read" al room del chat y al usuario emisor (para ✅✅ azul aunque no esté en el chat)
     const io = req.app.get("io");
-    if (io) io.to(`chat_${chatId}`).emit("messages:read", { chatId, readerId: req.user.id });
+    const otherId = getOtherUserId(check.chat, me);
+
+    if (io) {
+      io.to(`chat_${chatId}`).emit("messages:read", { chatId, readerId: req.user.id });
+
+      // el que debe ver el azul es el OTRO (quien envió mensajes), así que avisamos a su user room:
+      io.to(`user_${otherId}`).emit("messages:read", { chatId, readerId: req.user.id });
+    }
 
     res.json({ message: "Mensajes marcados como leídos" });
   } catch (err) {
@@ -140,7 +188,15 @@ router.put("/:chatId/messages/:messageId/delivered", authRequired, async (req, r
 
       const io = req.app.get("io");
       if (io) {
+        // chat room (si alguien está dentro del chat)
         io.to(`chat_${chatId}`).emit("message:delivered", {
+          chatId,
+          messageId,
+          delivered_at: msg.delivered_at,
+        });
+
+        // ✅ avisar también al emisor aunque NO esté en el chat
+        io.to(`user_${msg.sender_user_id}`).emit("message:delivered", {
           chatId,
           messageId,
           delivered_at: msg.delivered_at,
