@@ -37,6 +37,8 @@ app.use("/comments", commentsRoutes);
 app.use("/ratings", ratingsRoutes);
 app.use("/chats", chatsRoutes);
 app.use("/chats", messagesRoutes); // así quedan /chats/:chatId/messages
+app.use("/chats", require("./routes/chats.routes"));
+
 
 app.use((err, req, res, next) => {
   console.error("GLOBAL ERROR:", err);
