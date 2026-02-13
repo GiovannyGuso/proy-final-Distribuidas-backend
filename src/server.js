@@ -23,6 +23,7 @@ async function start() {
     }
 
     const server = http.createServer(app);
+    
     const io = setupSocket(server);
 
     app.set("io", io);
